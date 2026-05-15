@@ -4,6 +4,7 @@
 #include "uart_int.h"
 #include "defines.h"
 #include "exceptions.h"
+#include "log_config.h"
 
 /************* uart.c file ****************/
 UART uart[4];  // 4 UART structures
@@ -46,7 +47,6 @@ void uart_handler(UART* up) {
 int do_rx(UART* up) { // RX interrupt handler
   char c;
   c = *(up->base + UDR);
-  printf("RX inttrups: %c\n", c);
   if (c == 0xD) printf("\n");
   up->inbuf[up->inhead++] = c;
   up->inhead %= SBUFSIZE;
@@ -66,6 +66,7 @@ int do_tx(UART* up) { // TX interrupt handler
   c = up->outbuf[up->outtail++];
   up->outtail %= SBUFSIZE;
   *(up->base + UDR) = (int)c;  // write c to DR
+  up->txon = 1;
   up->outdata--;
   up->outroom++;
   return 0;
@@ -85,7 +86,7 @@ int ugetc(UART* up) { // return a char from UART
 }
 
 int uputc(UART* up, char c) { // output a char to UART
-  printf("uputc %c ", c);
+  printf("uputc %c (%x, %x) ", c, *(up->base + IMSC), up->txon);
   if (up->txon) {  // if TX is on, enter c into outbuf[]
     up->outbuf[up->outhead++] = c;
     up->outhead %= 128;
@@ -102,11 +103,9 @@ int uputc(UART* up, char c) { // output a char to UART
   while (*(up->base + UFR) & 0x20);  // loop while FR=TXF
   *(up->base + UDR) = (int)c;        // write c to DR
   *(up->base + IMSC) |= 0x30;        // 0000 0000: bit5=TX mask bit4=RX mask
-  up->txon = 1;
 }
 
 int ugets(UART* up, char* s) { // get a line from UART
-  printf("%s", "in ugtes: ");
   while ((*s = (char)ugetc(up)) != '\r') {
     uputc(up, *s++);
   }
@@ -134,35 +133,40 @@ int uprintx(UART* up, uint32_t val) {
 }
 
 int uprintf(UART* up, const char* fmt, ...) {
+  va_list args;  // ip points to first item in stack
+  va_start(args, fmt);
+  vuprintf(up, fmt, args);
+  va_end(args);
+}
+
+int vuprintf(UART* up, const char* fmt, va_list args) { 
   const char* cp = fmt;            // cp points to the fmt string
-  int* ip = (int*)&fmt + 1;  // ip points to first item in stack
   while (*cp) {              // scan the format string
     if (*cp != '%') {        // spit out ordinary chars
       uputc(up, *cp);
-      if (*cp == '\n')    // for each ‘\n’
-        uputc(up, '\r');  // print a ‘\r’
+      if (*cp == '\n')    // for each '\n'
+        uputc(up, '\r');  // print a '\r'
       cp++;
       continue;
     }
     cp++;           // cp points at a conversion symbol
     switch (*cp) {  // print item by %FORMAT symbol
       case 'c':
-        uputc(up, (char)*ip);
+        uputc(up, va_arg(args, int));
         break;
       case 's':
-        uprints(up, (char*)*ip);
+        uprints(up, va_arg(args, char *));
         break;
       case 'u':
-        uprintu(up, (uint32_t)*ip);
+        uprintu(up, va_arg(args, int));
         break;
       case 'd':
-        uprintd(up, (int)*ip);
+        uprintd(up, va_arg(args, int));
         break;
       case 'x':
-        uprintx(up, (uint32_t)*ip);
+        uprintx(up, va_arg(args, int));
         break;
     }
     cp++;
-    ip++;  // advance pointers
   }
 }
